@@ -1,0 +1,265 @@
+---
+title: "Practical Machine Learning Assigment <br> Prediction of a multiclass physical task"
+author: "Pablo Serrano"
+date: "February 10, 2016"
+output: html_document
+---
+
+## BACKGROUND
+
+There are many devices on the market that use accelerometer data to provide a quantification; i.e. *how much* of a particular activity the user does, but it is rarely quantified *how well* they do it. Details on the experimental design can be reviewed in Ugulino et al. 2012 (DOI: 10.1007/978-3-642-34459-6_6).
+
+## OBJECTIVES
+
+The goal of this project is to predict the manner in which a controlled physical exercise was performed, based on data from accelerometers placed on 6 participants. A prediction model Several prediction models will be trained and tested, the most accurate will be selected and validated in an independent data set. 
+
+Additionally a the outcome of 20 additional test cases will be predicted (but not evaluated due to the lack of outcome data in that data set).
+
+##MATERIALS AND METHODS
+
+### *Subjects and physical task*
+Six young health participants (20-28 years) with little weight lifting experience were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). Participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate. Accelerometers were placed on the belt, forearm, arm, and dumbell, respectively.
+
+### *Data*
+The data used for the present assignment has been generously made available by this source <http://groupware.les.inf.puc-rio.br/har>.
+
+The data files assigned are available through the following links:
+<br>ORIGINAL TRAINING DATA: <https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv>
+<br>ORIGINAL TESTING DATA: <https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv>
+
+```{r, echo=FALSE, message=F, warning=F}
+# 1. Read-in the data
+load("H:/data/BMD/Courses/Coursera Machine Learning/W01.RData") # deleteme
+# trainSet <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+# testSet  <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+
+ # 2. Preprocessing
+
+ # 2.1 Remove emtpy columns and user name (for extrapolation)
+ 
+   trainNA <- unlist(lapply(trainSet,FUN=function(X){all(is.na(X))}))
+   testNA  <- unlist(lapply(testSet, FUN=function(X){all(is.na(X))}))
+   removeCols <- unique(c(which(trainNA==TRUE), which(testNA==TRUE)))
+   removeCols <- c(removeCols, which(names(trainSet)=="user_name") )
+   trainSet2 <- trainSet[,-removeCols]
+   testSet2  <- testSet[,-removeCols]
+   
+ # 2.2 Remove columns of the test set, which are not included in the training set
+   
+   keepCols <- which(names(testSet2) %in% names(trainSet2))
+   testSet2  <- testSet2[,keepCols]
+   
+ # 2.3 Remove time stamp columns
+   
+   timeStampCols <- c("X", "raw_timestamp_part_1", "raw_timestamp_part_2", 
+                     "cvtd_timestamp",  "new_window",  "num_window")
+
+   trainSet2 <- trainSet2[,-which(names(trainSet2) %in% timeStampCols)]   
+   testSet2  <- testSet2[, -which(names(testSet2)  %in% timeStampCols)]
+ 
+ # 2.4 Split the training set into a training set and a true test set 
+ #     (the "test" set linked in the assignment does not include a column with the variable to be predicted)
+   
+   library(caret)
+   set.seed(123)
+   myBuild <- createDataPartition(y=trainSet2$classe, p=0.75, list=FALSE)
+   BuildSet    <- trainSet2[ myBuild,] 
+ 	 TrueValSet2 <- trainSet2[-myBuild,]
+   myTrain <- createDataPartition(y=BuildSet$classe, p=0.75, list=FALSE)
+	 TrueTrainSet2 <- BuildSet[ myTrain,] 
+	 TrueTestSet2  <- BuildSet[-myTrain,]
+  
+ # 3. Give some preliminary information
+ 
+ # 3.1. General information   
+   
+   numCols <- which((unlist(lapply(trainSet2,is.numeric))==TRUE))
+   cat("The size of the original training set is",dim(trainSet2)[1],"observations on 6 individuals.",
+       "\nThe size of the original test set is",dim(testSet2)[1],"observations on the same 6 individuals.\n")
+```
+**IMPORTANT:** the *original testing data* assigned in the link above does **not** include the outcome variable, i.e. there is no class column on which to test the accuracy of the predictions. For this reason, a design has been chosen, where the *original training data* from the link above is split into 3 subsets:<br>
+- a validation set (25% of the data)<br>
+- a training set (56.25% of the data = 0.75^2)<br> 
+- a test set (18.75% of the data = 0.75*0.25)<br>
+
+Different predictive models are fitted on the training set and tested on the test set. The best performer is chosen and tested again on the validation set.
+
+Some columns are removed during the preprocessing step following different criteria. Removed are columns that:<br>
+- are index columns (`X, problem_id`)<br>
+- are related to the time stamp (`raw_timestamp_part_1 , raw_timestamp_part_2, cvtd_timestamp, new_window, num_window`)<br>
+- refer to the user name (`user_name`)<br>
+- are empty (all NAs)<br>
+
+The reason for avoiding these columns is that they cannot be used to predict the correct classification of new data based on new individuals and/or unrelated time stamps. The only columns left for analysis are the true accelerometer parameters.
+
+```{r, echo=FALSE, message=F, warning=F}
+   # 3.1 General information (continue)
+   
+   cat("The following columns were removed due to total data missingness either",
+       "in the training group and/or in the test group:\n")
+   print(names(trainNA)[removeCols])
+   cat("The number of predictors is",dim(trainSet2)[2]-1,"\n")
+   cat(length(numCols),"predictor(s) is/are numeric:\n")
+   print(names(trainSet2)[numCols])
+#   cat(dim(trainSet2)[2]-1-length(numCols),"predictor(s) is/are categorical:\n")
+#   print(names(trainSet2[,-which(names(trainSet2)=="classe")])[-numCols])
+   
+```
+
+Some of the predictors follow a fairly normal distribution like `total_accel_forearm`, while others may follow an exponential distribution like `gyros_forearm_z` (with most values aggregated closely around 0, but a maximum value of 231), or a much more complex distribution like for `roll_forearm` (Histograms not shown, because the number of figures is limited).
+
+```{r, echo=FALSE, message=F, warning=F}   
+ # 3.2 Show histograms exemplary for selected predictors (deactivated to to figure number limitations)
+
+#   for(i in c("total_accel_forearm","gyros_forearm_z","roll_forearm")){ 
+#     print(ggplot(aes_string(x=i), data=TrueTrainSet2) + geom_histogram() + ggtitle("Histogram"))
+#   }   
+```
+<br>
+Some predictors are strongly positively correlated with each other such as `accel_dumbbell_x` and `pitch_dumbbell` or strongly negatively correlated such as `gyros_arm_x` and `gyros_arm_y`. There are even clear clusters visible in the correlation matrix below (predictors ordered by hierarchical clustering), which suggests that there could be more predictors available than needed for a reasonable classification.
+
+```{r, echo=FALSE, message=F, warning=F}      
+ # 3.3 Show correlation heatmap ordered in clusters
+ 
+   library(reshape2)
+   library(ggdendro)
+   
+    theme_none <- theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.background = element_blank(),
+      axis.title.x = element_text(colour=NA),
+      axis.title.y = element_blank(),
+      axis.text.x = element_blank(),
+      axis.text.y = element_blank(),
+      axis.line = element_blank(),
+      axis.ticks = element_blank()
+    )
+  
+    corr_matrix <- cor(trainSet2[,numCols], method="spearman", use="na.or.complete")
+    corr_clust  <- hclust(method="ward.D",dist(abs(corr_matrix)))
+    dd.col <- as.dendrogram(hclust(method="ward.D",dist(abs(corr_matrix))))
+    dd.row <- as.dendrogram(hclust(method="ward.D",dist(t(abs(corr_matrix)))))
+    col.ord <- order.dendrogram(dd.col)
+    row.ord <- order.dendrogram(dd.row)
+      
+    melt_corr_matrix <- melt(corr_matrix)
+    melt_corr_matrix$Var1 = factor(melt_corr_matrix$Var1, levels=corr_clust$labels[corr_clust$order], ordered=TRUE)
+    melt_corr_matrix$Var2 = factor(melt_corr_matrix$Var2, levels=corr_clust$labels[corr_clust$order], ordered=TRUE)
+      
+    xx <- corr_matrix[col.ord, row.ord]
+    xx_names <- attr(xx, "dimnames")
+    df <- as.data.frame(xx)
+    colnames(df) <- xx_names[[2]]
+    df$y.variable <- xx_names[[1]]
+    df$y.variable <- with(df, factor(y.variable, levels=y.variable, ordered=TRUE))
+      
+    mdf <- melt(df, id.vars="y.variable")
+    ddata_x <- dendro_data(dd.row)
+    ddata_y <- dendro_data(dd.col)
+      
+    p1 <- qplot(x=Var1, y=Var2, data=melt_corr_matrix, fill=value, geom="raster") #"tile")
+    p1 <- p1 + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+         scale_fill_gradientn(colours=c("blue", "white", "white", "red"), limits = c(-1, 1)) +
+         ylab ("") +
+         xlab ("") +
+         theme(legend.justification=c(1,0), legend.position=c(1,0)) # Put legend bottom-right in the graph
+      
+    print(p1)
+```  
+<br>
+Nevertheless, neither data transformation nor dimension reduction by PCA was attempted. The reason for the former is that no algorithm is applied that would require the data to be normally distributed, and the reason for the latter was to reduce the amount of pre-processing to the minimum necessary. For a better performance in terms of processing time (see Results section) it could be still beneficial to apply a reduction of dimensions.
+
+### *Algorithms*
+
+The outcome variable is a multiclass one. For this reason, predictive modelling algorithms that expect a quantitative outcome variable, such as e.g. linear models or bagging, are not applicable here. 
+
+A reasonable approach seems to apply at least one simple model and at least one complex model. Here, the most suitable algorithms *a priori* are linear discriminant analysis (method`lda`) and regression trees (method `rpart`) at the less complex end, and random forests (method `rf`) and boosting trees (method `gbm`) at the more complex end.
+
+This is the reason why 3 subsets were created out of the *original training set*, one subset for fitting the models, one for testing the models and selecting the best performer, and one for validating the accuracy of the best performer (although the latter might not have been strictly neccessary). Keep in mind that the *original testing set* could not be really used for testing, because it - unfortunately- lacked the outcome variable for control.
+
+For details on the R version and package versions used, see the attachment section.
+
+##RESULTS
+
+### *Selecting the predictive model*
+
+The four different algorithms (linear discriminant analysis, regression trees, random forests, and boosting trees) applied, differed greatly in terms of accuracy and computation time. The figures below represent the confusion matrix for each fitted model, where the correct prediction probability is depicted in the diagonal (bottom-left to top-right) for each given class. The overall accuracy is shown in the figure's title along with the processing time needed to fit the model (in seconds). While the first two models are fitted very quickly, the more complex ones took up to approximately one hour to be fitted. Fortunately, the computing time invested turns into a high accuracy (>90% for both random forests and boosting trees).
+
+```{r, echo=FALSE, message=F, warning=F}  
+
+ # 4. Fit Predictive Models
+    
+ TrainPredictPlot <-  function(TrnSet, TstSet, method, modfit=NULL, isPtm=TRUE){
+      ptm <- proc.time()
+      if(is.null(modfit)) modfit <- train(classe~., method=method,  data=TrnSet, verbose=FALSE)
+      ptm <- proc.time() - ptm
+      tmp_CM <- confusionMatrix(predict(modfit, TstSet), TstSet$classe)
+      tmp_Acc<- round(tmp_CM$overall[1],3)
+      tmp_CM <- melt(tmp_CM$table)
+      tmp_CM$perc <- NA
+      for(i in unique(tmp_CM$Reference)){ 
+        tmp_CM$perc[tmp_CM$Reference==i] <- tmp_CM$value[tmp_CM$Reference==i]/sum(tmp_CM$value[tmp_CM$Reference==i])
+      }
+      tmp_plot <- qplot(x=Reference, y=Prediction, data=tmp_CM, fill=perc, geom="raster") +
+                  scale_fill_gradientn(colours=c("white", "red"), limits = c(0, 1)) +
+                  annotate("text", x = tmp_CM$Reference, 
+                                   y = tmp_CM$Prediction, 
+                                   label = ifelse(tmp_CM$perc==0,"",as.character(round(tmp_CM$perc, 4))),
+                                   size = 3) +
+                  ggtitle(ifelse(isPtm,
+                                 paste("METHOD:",method,"     ACCURACY:",tmp_Acc,"     PROCESSING:",ptm[[3]]),
+                                 paste("METHOD:",method,"     ACCURACY:",tmp_Acc)))
+      print(tmp_plot)
+      return(modfit)
+   }  
+    
+  # 4.1 Fit on TrueTestSet2
+ 
+  myApproaches <- c("lda", "rpart", "rf", "gbm")
+  myModels <- list()
+  counter  <- 0
+  for(myMethod in myApproaches){ 
+    counter <- counter + 1
+    myModels[[counter]] <- TrainPredictPlot(TrnSet=TrueTrainSet2, TstSet=TrueTestSet2, method=myMethod)
+  }
+```
+<br>
+Interestingly, in spite of having an overall low accuracy, the first two models perform very well distinguishing whether the physical exercise was performed correctly (class A) or incorrectly (rest of the classes). The linear discriminant analysis identifies over 80% and the regression tree over 90% of the correctly performed exercises.<br>
+
+### *Validating the predictive model*
+
+The random forests model scored as the most accurate classifier and thus was selected and challenged again with a previously unused subset, the validation set. As shown in the figure below, the performance is approximately identical as for the test set.
+
+```{r, echo=FALSE, message=F, warning=F}  
+
+  # 4.2 Validate the best of the above on TrueValSet2
+  
+  bestApproach <- which.max(sapply(myModels, FUN=function(X){max(X$results[,"Accuracy"])}))
+  TrainPredictPlot(TrnSet=TrueTrainSet2, TstSet=TrueValSet2, 
+                   method=myApproaches[bestApproach], 
+                   modfit = myModels[[bestApproach]], isPtm = FALSE)
+```
+
+### *Prediciting the outcome of the original testing set*
+
+As previously mentioned, the *original testing set* assigned for the current project could not be really used for testing, because it lacked the outcome variable for control. Nevertheless, it could be used to generate (non confirmable) predictions. The corresponding outcome predicted for the 20 observations was:
+
+```{r, echo=FALSE, message=F, warning=F}  
+# 5. Predict (without testing) the assigned test data set
+  
+   print(predict(myModels[[bestApproach]], testSet2))
+  
+```
+##CONCLUSIONS
+
+A relatively simple regression tree is highly accurate at segregating dumbbell biceps curls performed correctly and incorrectly (class A versus all other classes). However, a more complex model is needed to correctly classify all 5 categories. The highest out of sample accuracy (~99%) is achieved by a random forests model at the price of the highest computational time needed (around 1h in my case). If computational time would be an issue, the model could benefit from a dimension reduction based on principal components analysis (PCA), since it could be shown that several predictors strongly correlate with each other.
+
+Although the individual annotation was removed from the training set to improve the quality of extrapolations, a more reliable confirmation would be achieved by validating on observations retrieved from new individuals not included in the training set.
+
+##ATTACHMENTS
+
+### *Session Information*
+```{r}
+sessionInfo()
+```
